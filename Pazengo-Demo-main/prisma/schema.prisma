@@ -1,0 +1,426 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  DEALER
+  BUYER
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum Transmission {
+  MANUAL
+  AUTOMATIC
+}
+
+enum Fuel {
+  PETROL
+  DIESEL
+  HYBRID
+  ELECTRIC
+}
+
+enum Condition {
+  NEW
+  USED
+  DEMO
+}
+
+enum ServiceHistory {
+  FULL_FRANCHISE
+  FULL
+  PARTIAL
+  NONE
+  UNKNOWN
+}
+
+enum CarStatus {
+  DRAFT
+  PUBLISHED
+  BLOCKED
+  SOLD
+}
+
+enum PaymentKind {
+  LISTING_FEE
+  DEPOSIT
+  FULL_PURCHASE
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EnquiryChannel {
+  MESSAGE
+  WHATSAPP
+  SHOW_NUMBER
+  PANEL
+}
+
+enum ReviewDecision {
+  REQUEST_CHANGES
+  REJECTED
+  RESUBMITTED
+}
+
+enum ArticleKind {
+  NEWS
+  REVIEW
+}
+
+enum ArticleStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model ListingReview {
+  id        String         @id @default(cuid())
+  carId     String
+  car       Car            @relation(fields: [carId], references: [id], onDelete: Cascade)
+  actor     String         @default("admin")
+  decision  ReviewDecision
+  message   String         @default("")
+  seenAt    DateTime?
+  createdAt DateTime       @default(now())
+
+  @@index([carId])
+}
+
+model User {
+  id            String          @id @default(cuid())
+  name          String
+  email         String          @unique
+  phone         String?
+  passwordHash  String?
+  avatarUrl     String?
+  role          Role            @default(BUYER)
+  status        UserStatus      @default(ACTIVE)
+  blockedReason String?
+  createdAt     DateTime        @default(now())
+  payments      Payment[]
+  cars          Car[]           @relation("DealerCars")
+  auditActions  AuditLog[]      @relation("ActorLogs")
+  favorites     Favorite[]
+  favoriteLists FavoriteList[]
+  recentViews   RecentView[]
+  enquiries     Enquiry[]
+  searches      SearchHistory[]
+  savedSearches SavedSearch[]
+  listings      Car[]           @relation("UserListings")
+  resetTokens   PasswordReset[]
+}
+
+model Car {
+  id               String          @id @default(cuid())
+  make             String
+  model            String
+  variant          String?
+  year             Int
+  priceZmw         Int
+  mileageKm        Int
+  transmission     Transmission
+  fuel             Fuel
+  bodyType         String          @default("Hatchback")
+  drivetrain       String          @default("")
+  condition        Condition       @default(USED)
+  chassisNo        String?         @unique
+  color            String?
+  location         String          @default("")
+  seats            Int             @default(5)
+  serviceHistory   ServiceHistory  @default(UNKNOWN)
+  photos           Json            @default("[]")
+  features         Json            @default("[]")
+  status           CarStatus       @default(DRAFT)
+  soldAt           DateTime?
+  isFeatured       Boolean         @default(false)
+  featuredAt       DateTime?
+  dealerId         String?
+  dealer           User?           @relation("DealerCars", fields: [dealerId], references: [id])
+  // Frontend submitter. Set for user listings, null for admin uploads —
+  // this is what separates user inventory from admin inventory.
+  ownerId          String?
+  owner            User?           @relation("UserListings", fields: [ownerId], references: [id])
+  // Purchased listing package. Snapshot keeps history when products change.
+  listingProductId String?
+  listingProduct   ListingProduct? @relation(fields: [listingProductId], references: [id], onDelete: SetNull)
+  productName      String?
+  // Stamped on publish: publishedAt + product duration. Null never expires.
+  expiresAt        DateTime?
+  payments         Payment[]       @relation("CarPayments")
+  vehicleTypeId    String?
+  vehicleType      VehicleType?    @relation(fields: [vehicleTypeId], references: [id])
+  attributes       Json            @default("{}")
+  favoritedBy      Favorite[]
+  viewedBy         RecentView[]
+  enquiries        Enquiry[]
+  reviews          ListingReview[]
+  createdBy        String          @default("admin")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([make, model])
+  @@index([status])
+  @@index([soldAt])
+  @@index([status, isFeatured, createdAt])
+  @@index([priceZmw])
+  @@index([location])
+  @@index([serviceHistory])
+  @@index([drivetrain])
+  @@index([ownerId])
+}
+
+model ListingProduct {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  description  String    @default("")
+  priceZmw     Int       @default(0)
+  durationDays Int       @default(7)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  cars         Car[]
+  payments     Payment[] @relation("ProductPayments")
+}
+
+/// Admin-configurable platform tunables (see lib/settings.ts).
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// Manageable navigation entries. Scope "header" drives the marketplace
+/// header (admin sidebar can reuse the table later). Deleting a row never
+/// removes its route — direct URLs keep working.
+model MenuItem {
+  id         String  @id @default(cuid())
+  scope      String
+  key        String
+  label      String
+  href       String?
+  emphasized Boolean @default(false)
+  position   Int     @default(0)
+  visible    Boolean @default(true)
+
+  @@unique([scope, key])
+  @@index([scope, position])
+}
+
+model Payment {
+  id               String          @id @default(cuid())
+  userId           String
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind             PaymentKind
+  amountZar        Int
+  // Minor-units money in the given currency (ngwee for ZMW listing fees).
+  currency         String          @default("ZAR")
+  carId            String?
+  car              Car?            @relation("CarPayments", fields: [carId], references: [id], onDelete: SetNull)
+  listingProductId String?
+  listingProduct   ListingProduct? @relation("ProductPayments", fields: [listingProductId], references: [id], onDelete: SetNull)
+  method           String          @default("EFT")
+  reference        String
+  proofUrl         String?
+  status           PaymentStatus   @default(PENDING)
+  reviewNote       String?
+  reviewedBy       String?
+  decidedAt        DateTime?
+  createdAt        DateTime        @default(now())
+
+  @@index([status])
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String   @default("admin")
+  actorId   String?
+  staff     User?    @relation("ActorLogs", fields: [actorId], references: [id])
+  action    String
+  entity    String
+  entityId  String
+  meta      Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+}
+
+model Favorite {
+  id        String        @id @default(cuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  carId     String
+  car       Car           @relation(fields: [carId], references: [id], onDelete: Cascade)
+  listId    String?
+  list      FavoriteList? @relation(fields: [listId], references: [id], onDelete: SetNull)
+  createdAt DateTime      @default(now())
+
+  @@unique([userId, carId])
+  @@index([userId])
+}
+
+model FavoriteList {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime   @default(now())
+  favorites Favorite[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model RecentView {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  carId    String
+  car      Car      @relation(fields: [carId], references: [id], onDelete: Cascade)
+  viewedAt DateTime @updatedAt
+
+  @@unique([userId, carId])
+  @@index([userId])
+}
+
+model Enquiry {
+  id        String         @id @default(cuid())
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  carId     String
+  car       Car            @relation(fields: [carId], references: [id], onDelete: Cascade)
+  channel   EnquiryChannel
+  message   String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([userId, carId, channel])
+  @@index([userId])
+}
+
+model SearchHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key         String
+  label       String
+  params      String   @default("")
+  resultCount Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model SavedSearch {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  key         String
+  params      String   @default("")
+  emailAlerts Boolean  @default(false)
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+enum FieldKind {
+  TEXT
+  NUMBER
+  SELECT
+  MULTI_SELECT
+  BOOLEAN
+  DATE
+  LONG_TEXT
+}
+
+model VehicleType {
+  id        String             @id @default(cuid())
+  name      String             @unique
+  slug      String             @unique
+  createdAt DateTime           @default(now())
+  fields    VehicleTypeField[]
+  cars      Car[]
+}
+
+model FormField {
+  id        String             @id @default(cuid())
+  key       String             @unique
+  label     String
+  kind      FieldKind
+  options   Json               @default("[]")
+  unit      String?
+  minValue  Float?
+  maxValue  Float?
+  help      String?
+  binding   String?
+  // Dynamic vocabularies (make, model, location): options come live from
+  // inventory and free entries via "Other", so membership is not enforced.
+  dynamic   Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  types     VehicleTypeField[]
+}
+
+model VehicleTypeField {
+  vehicleTypeId String
+  vehicleType   VehicleType @relation(fields: [vehicleTypeId], references: [id], onDelete: Cascade)
+  fieldId       String
+  field         FormField   @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  required      Boolean     @default(false)
+  position      Int         @default(0)
+  // Dropdown options override for this type only. Empty = inherit the
+  // library field's options.
+  options       Json        @default("[]")
+
+  @@id([vehicleTypeId, fieldId])
+  @@index([vehicleTypeId])
+}
+
+/// Single-use password reset tokens. Only the SHA-256 hash is stored; the
+/// raw token is shown once for manual sharing (no email infrastructure).
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+/// Blog articles for the News & Reviews page.
+model Article {
+  id          String        @id @default(cuid())
+  title       String
+  slug        String        @unique
+  kind        ArticleKind   @default(NEWS)
+  excerpt     String        @default("")
+  coverUrl    String?
+  body        String        @default("")
+  status      ArticleStatus @default(DRAFT)
+  publishedAt DateTime?
+  createdBy   String        @default("admin")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([status, kind, publishedAt])
+}
